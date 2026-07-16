@@ -6,11 +6,11 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/jessekalil/rds-bridge/internal/awsiam"
 	"github.com/jessekalil/rds-bridge/internal/config"
+	"github.com/jessekalil/rds-bridge/internal/proc"
 	"github.com/jessekalil/rds-bridge/internal/proxy"
 	"github.com/jessekalil/rds-bridge/internal/tunnel"
 )
@@ -27,7 +27,7 @@ func Run(t *config.Target) error {
 		}
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), proc.ShutdownSignals()...)
 	defer stop()
 
 	sup := tunnel.New(t, tag("tunnel"))

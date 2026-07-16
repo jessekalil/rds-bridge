@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/rds/auth v1.6.29
 	github.com/aws/aws-sdk-go-v2/service/sts v1.43.3
 	github.com/jackc/pgx/v5 v5.10.0
+	golang.org/x/sys v0.26.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

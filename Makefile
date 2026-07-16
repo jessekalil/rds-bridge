@@ -3,7 +3,7 @@ PKG     := github.com/jessekalil/rds-bridge
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
+PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
 .PHONY: build install vet test tidy clean release
 
@@ -30,6 +30,7 @@ release:
 	@for p in $(PLATFORMS); do \
 		os=$${p%/*}; arch=$${p#*/}; \
 		out=dist/$(BINARY)-$$os-$$arch; \
+		[ "$$os" = "windows" ] && out=$$out.exe; \
 		echo "building $$out"; \
 		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 \
 			go build -ldflags "$(LDFLAGS)" -o $$out . ; \
