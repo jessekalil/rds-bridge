@@ -56,6 +56,26 @@ parent, then the proxy detaches with a refreshed token cache. Without a TTY
 
 ## Install
 
+Install the latest prebuilt release (Linux and macOS):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jessekalil/rds-bridge/main/scripts/install.sh | bash
+```
+
+To install a specific release or use a different install directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jessekalil/rds-bridge/main/scripts/install.sh | bash -s -- --version v0.1.0
+curl -fsSL https://raw.githubusercontent.com/jessekalil/rds-bridge/main/scripts/install.sh | bash -s -- --dir "$HOME/bin"
+```
+
+The installer downloads the matching GitHub Release archive and verifies its
+SHA-256 checksum before placing `rds-bridge` in `~/.local/bin` by default.
+Download the matching archive from [GitHub Releases](https://github.com/jessekalil/rds-bridge/releases)
+instead if you prefer a manual install.
+
+Build from source (requires Go):
+
 ```bash
 make install          # go install into $GOBIN
 # or
@@ -68,9 +88,15 @@ Without `make`, the Go toolchain works too:
 
 ```bash
 go install github.com/jessekalil/rds-bridge@latest
+# or pin a published release
+go install github.com/jessekalil/rds-bridge@v0.1.0
 # or
 go build -o bin/rds-bridge .
 ```
+
+Replace `v0.1.0` with a published version, or use `@latest` for the latest
+module release. Prebuilt release binaries report their release metadata with
+`rds-bridge --version`; source builds report development metadata.
 
 ## Configure
 
@@ -129,12 +155,13 @@ aws configure sso
 Use the same profile names that appear in `rds-bridge.yaml`. Re-run
 `aws configure sso` whenever the session expires.
 
-**3. Download the binary.** Grab `rds-bridge-windows-amd64.exe` from the
-project's Releases, rename it to `rds-bridge.exe`, and put it in
+**3. Download the release archive.** Download the `windows_amd64.zip` (or
+`windows_arm64.zip`) archive from the project's [Releases](https://github.com/jessekalil/rds-bridge/releases),
+then extract `rds-bridge.exe` and `rds-bridge.example.yaml` into
 `C:\Users\<you>\rds-bridge\`. Optionally add that folder to your `PATH`.
 
-**4. Copy the config into the same folder.** Copy `rds-bridge.example.yaml`
-into `C:\Users\<you>\rds-bridge\`, rename it to `rds-bridge.yaml`, and edit it:
+**4. Create the config in the same folder.** Rename the extracted
+`rds-bridge.example.yaml` to `rds-bridge.yaml`, and edit it:
 
 ```bat
 cd C:\Users\<you>\rds-bridge

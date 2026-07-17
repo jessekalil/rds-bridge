@@ -18,7 +18,11 @@ import (
 	"golang.org/x/term"
 )
 
-var version = "dev"
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
 
 const usage = `rds-bridge — local Postgres proxy to RDS over SSM with IAM auth
 
@@ -62,7 +66,7 @@ func main() {
 	case "env":
 		err = cmdEnv(args)
 	case "version", "-v", "--version":
-		fmt.Println(version)
+		fmt.Printf("%s (commit: %s, built: %s)\n", version, commit, date)
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(1)
