@@ -6,7 +6,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
+
+	"github.com/jessekalil/rds-bridge/internal/proc"
 )
 
 // Dir returns the per-target state directory under XDG_STATE_HOME (or
@@ -67,7 +68,7 @@ func PID(target string) (pid int, running bool) {
 	if err != nil {
 		return 0, false
 	}
-	return pid, syscall.Kill(pid, 0) == nil
+	return pid, proc.IsAlive(pid)
 }
 
 // Stop terminates the detached process group and clears the pid file.
@@ -78,10 +79,8 @@ func Stop(target string) error {
 		_ = os.Remove(path)
 		return fmt.Errorf("not running")
 	}
-	// Negative pid signals the whole process group (tunnel child included).
-	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil {
-		_ = syscall.Kill(pid, syscall.SIGTERM)
-	}
+	// Signals the whole daemon subtree (tunnel child included).
+	_ = proc.KillDaemon(pid)
 	_ = os.Remove(path)
 	return nil
 }

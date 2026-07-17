@@ -5,11 +5,12 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/jessekalil/rds-bridge/internal/config"
+	"github.com/jessekalil/rds-bridge/internal/proc"
 	"github.com/jessekalil/rds-bridge/internal/runner"
 	"github.com/jessekalil/rds-bridge/internal/state"
 )
@@ -24,7 +25,7 @@ Usage:
   rds-bridge stop <target>
   rds-bridge status <target>
   rds-bridge logs <target> [-f]
-  rds-bridge env <target> [database]
+  rds-bridge env <target> [database] [--shell posix|powershell|cmd]
   rds-bridge version
 
 A target is one RDS instance (one SSM tunnel) exposing one or more databases,
@@ -184,7 +185,7 @@ func startDetached(target, configPath string) error {
 	cmd := exec.Command(exe, "start", target, "--config", configPath)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.SysProcAttr = proc.DetachAttr()
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -193,7 +194,7 @@ func startDetached(target, configPath string) error {
 	}
 	fmt.Printf("started %s (pid %d)\n", target, cmd.Process.Pid)
 	fmt.Printf("logs:  rds-bridge logs %s -f\n", target)
-	fmt.Printf("env:   eval \"$(rds-bridge env %s)\"\n", target)
+	fmt.Printf("env:   %s\n", envHint(target))
 	return nil
 }
 
@@ -261,18 +262,14 @@ func cmdLogs(args []string) error {
 	if err != nil {
 		return err
 	}
-	tailArgs := []string{"-n", "200"}
-	if follow {
-		tailArgs = append(tailArgs, "-f")
-	}
-	tailArgs = append(tailArgs, logPath)
-	tail := exec.Command("tail", tailArgs...)
-	tail.Stdout = os.Stdout
-	tail.Stderr = os.Stderr
-	return tail.Run()
+	return state.Tail(logPath, follow, os.Stdout)
 }
 
 func cmdEnv(args []string) error {
+	shell, args, err := extractShell(args)
+	if err != nil {
+		return err
+	}
 	positionals, configPath, err := parseArgs(args, nil)
 	if err != nil {
 		return err
@@ -290,12 +287,74 @@ func cmdEnv(args []string) error {
 		return err
 	}
 	local := db.EffectiveLocal(t)
-	fmt.Printf("export DB_DATABASE=%s\n", db.Name)
-	fmt.Printf("export DB_PORT=%d\n", db.ListenPort)
-	fmt.Printf("export DB_SSL_REJECT_UNAUTHORIZED=false\n")
-	fmt.Printf("export DB_READ_HOST=127.0.0.1\n")
-	fmt.Printf("export DB_WRITE_HOST=127.0.0.1\n")
-	fmt.Printf("export DB_USER=%s\n", local.User)
-	fmt.Printf("export DB_PASSWORD=%s\n", local.Password)
+	vars := [][2]string{
+		{"DB_DATABASE", db.Name},
+		{"DB_PORT", strconv.Itoa(db.ListenPort)},
+		{"DB_SSL_REJECT_UNAUTHORIZED", "false"},
+		{"DB_READ_HOST", "127.0.0.1"},
+		{"DB_WRITE_HOST", "127.0.0.1"},
+		{"DB_USER", local.User},
+		{"DB_PASSWORD", local.Password},
+	}
+	for _, kv := range vars {
+		fmt.Println(formatEnv(shell, kv[0], kv[1]))
+	}
 	return nil
+}
+
+// defaultShell picks the env output syntax for the current OS: PowerShell on
+// Windows, POSIX everywhere else.
+func defaultShell() string {
+	if runtime.GOOS == "windows" {
+		return "powershell"
+	}
+	return "posix"
+}
+
+// extractShell pulls an optional `--shell <value>` out of args, returning the
+// resolved shell and the remaining args. Unknown values are rejected.
+func extractShell(args []string) (shell string, rest []string, err error) {
+	shell = defaultShell()
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--shell" {
+			if i+1 >= len(args) {
+				return "", nil, fmt.Errorf("--shell needs a value (posix|powershell|cmd)")
+			}
+			shell = args[i+1]
+			i++
+			continue
+		}
+		rest = append(rest, args[i])
+	}
+	switch shell {
+	case "posix", "powershell", "cmd":
+		return shell, rest, nil
+	default:
+		return "", nil, fmt.Errorf("unknown shell %q (want posix|powershell|cmd)", shell)
+	}
+}
+
+// formatEnv renders one environment assignment in the given shell's syntax.
+func formatEnv(shell, key, value string) string {
+	switch shell {
+	case "powershell":
+		return fmt.Sprintf("$env:%s = \"%s\"", key, value)
+	case "cmd":
+		return fmt.Sprintf("set %s=%s", key, value)
+	default: // posix
+		return fmt.Sprintf("export %s=%s", key, value)
+	}
+}
+
+// envHint returns the shell command that loads a target's env vars into the
+// current shell, matched to the OS default shell.
+func envHint(target string) string {
+	switch defaultShell() {
+	case "powershell":
+		return fmt.Sprintf("rds-bridge env %s --shell powershell | Invoke-Expression", target)
+	case "cmd":
+		return fmt.Sprintf(`rds-bridge env %s --shell cmd > "%%TEMP%%\rds-env.bat" && call "%%TEMP%%\rds-env.bat"`, target)
+	default: // posix
+		return fmt.Sprintf("eval \"$(rds-bridge env %s)\"", target)
+	}
 }

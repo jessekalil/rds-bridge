@@ -7,10 +7,10 @@ import (
 	"net"
 	"os/exec"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/jessekalil/rds-bridge/internal/config"
+	"github.com/jessekalil/rds-bridge/internal/proc"
 )
 
 const restartDelay = 5 * time.Second
@@ -71,18 +71,17 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 		"--document-name", "AWS-StartPortForwardingSessionToRemoteHost",
 		"--parameters", string(params),
 	)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	if err := cmd.Start(); err != nil {
+	child, err := proc.StartChild(cmd)
+	if err != nil {
 		return fmt.Errorf("start aws ssm: %w", err)
 	}
 
-	// Kill the whole process group when ctx is cancelled.
+	// Kill the whole subtree when ctx is cancelled.
 	done := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+			_ = child.Kill()
 		case <-done:
 		}
 	}()
