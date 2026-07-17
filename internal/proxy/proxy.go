@@ -22,12 +22,11 @@ import (
 	"github.com/jessekalil/rds-bridge/internal/config"
 )
 
-// Proxy is a Postgres wire-protocol proxy for a single database. The app
-// authenticates with a static credential; each backend connection to RDS is
-// opened with a freshly minted IAM token. Several Proxy instances (one per
-// database) share one tunnel, Authenticator and TLS config.
+// Proxy is a Postgres wire-protocol proxy for one RDS instance. The app
+// authenticates with a static credential and picks the database in its startup
+// message; each backend connection to RDS is opened with a freshly minted IAM
+// token against that database (the token is database-agnostic).
 type Proxy struct {
-	dbName       string
 	listenPort   int
 	local        config.Local
 	ssmLocalPort int
@@ -36,15 +35,13 @@ type Proxy struct {
 	logf         func(format string, args ...any)
 }
 
-// New builds a Proxy for one database. tlsCfg is shared across databases (a
-// self-signed cert generated once by SelfSignedTLS) so the app may connect with
-// SSL without any cert files on disk.
-func New(dbName string, listenPort int, local config.Local, ssmLocalPort int, auth *awsiam.Authenticator, tlsCfg *tls.Config, logf func(format string, args ...any)) *Proxy {
+// New builds a Proxy. tlsCfg (a self-signed cert generated once by SelfSignedTLS)
+// lets the app connect with SSL without any cert files on disk.
+func New(listenPort int, local config.Local, ssmLocalPort int, auth *awsiam.Authenticator, tlsCfg *tls.Config, logf func(format string, args ...any)) *Proxy {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
 	return &Proxy{
-		dbName:       dbName,
 		listenPort:   listenPort,
 		local:        local,
 		ssmLocalPort: ssmLocalPort,
@@ -110,12 +107,19 @@ func (p *Proxy) serve(ctx context.Context, client net.Conn) error {
 		return err
 	}
 
-	hj, err := p.dialBackend(ctx)
+	dbName := sm.Parameters["database"]
+	if dbName == "" {
+		writeFatal(be, "3D000", "no database specified")
+		return errors.New("no database specified")
+	}
+
+	hj, err := p.dialBackend(ctx, dbName)
 	if err != nil {
-		writeFatal(be, "08006", "backend connection failed")
-		return fmt.Errorf("dial backend: %w", err)
+		writeFatal(be, "08006", fmt.Sprintf("backend connection to database %q failed", dbName))
+		return fmt.Errorf("dial backend %q: %w", dbName, err)
 	}
 	defer hj.Conn.Close()
+	p.logf("connection %s -> database %s", client.RemoteAddr(), dbName)
 
 	if err := completeFrontendHandshake(be, hj); err != nil {
 		return err
@@ -174,7 +178,7 @@ func (p *Proxy) authClient(sm *pgproto3.StartupMessage, be *pgproto3.Backend, cl
 	return nil
 }
 
-func (p *Proxy) dialBackend(ctx context.Context) (*pgconn.HijackedConn, error) {
+func (p *Proxy) dialBackend(ctx context.Context, dbName string) (*pgconn.HijackedConn, error) {
 	user, token, err := p.auth.Token(ctx)
 	if err != nil {
 		return nil, err
@@ -186,7 +190,7 @@ func (p *Proxy) dialBackend(ctx context.Context) (*pgconn.HijackedConn, error) {
 	}
 	cfg.Host = "127.0.0.1"
 	cfg.Port = uint16(p.ssmLocalPort)
-	cfg.Database = p.dbName
+	cfg.Database = dbName
 	cfg.User = user
 	cfg.Password = token
 	cfg.TLSConfig = &tls.Config{InsecureSkipVerify: true} // matches DB_SSL_REJECT_UNAUTHORIZED=false

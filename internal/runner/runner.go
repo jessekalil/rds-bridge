@@ -51,28 +51,22 @@ func Run(t *config.Target) error {
 		return err
 	}
 
-	dbs := t.SortedDatabases()
-	errc := make(chan error, len(dbs))
-	for _, db := range dbs {
-		px := proxy.New(db.Name, db.ListenPort, db.EffectiveLocal(t), t.SSM.LocalPort, auth, tlsCfg, tag("proxy:"+db.Name))
-		go func() { errc <- px.Listen(ctx) }()
-		tag("proxy")("%s ready — app can connect to 127.0.0.1:%d", db.Name, db.ListenPort)
-	}
+	px := proxy.New(t.ListenPort, t.Local, t.SSM.LocalPort, auth, tlsCfg, tag("proxy"))
+	errc := make(chan error, 1)
+	go func() { errc <- px.Listen(ctx) }()
+	tag("proxy")("ready — app can connect to 127.0.0.1:%d (choose database via dbname)", t.ListenPort)
 
-	for {
-		select {
-		case <-ctx.Done():
-			tag("")("shutting down")
+	select {
+	case <-ctx.Done():
+		tag("")("shutting down")
+		stop()
+		// Give the tunnel goroutine a moment to kill its child group.
+		time.Sleep(500 * time.Millisecond)
+		return nil
+	case err := <-errc:
+		if err != nil {
 			stop()
-			// Give the tunnel goroutine a moment to kill its child group.
-			time.Sleep(500 * time.Millisecond)
-			return nil
-		case err := <-errc:
-			if err != nil {
-				stop()
-				return err
-			}
-			// A listener returned nil (ctx closing); keep draining until ctx.Done.
 		}
+		return err
 	}
 }

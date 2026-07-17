@@ -7,9 +7,10 @@ Your app connects to `127.0.0.1:<listen_port>` with a static credential. The
 proxy opens each backend connection to RDS with a freshly minted IAM token, so
 there is no token-refresh loop, no PgBouncer, no Docker, no certificate files.
 
-A **target is one RDS instance** (one SSM tunnel) and can expose **several
-databases** on the instance, each on its own local port — the single tunnel is
-shared (the IAM token is per user/host, not per database).
+A **target is one RDS instance** (one SSM tunnel) exposed on **one local port**.
+The client chooses which database to connect to (via `dbname` / `DB_DATABASE`),
+so that single port serves **every database** on the instance — the IAM token is
+per user/host, not per database.
 
 ```
 app ──▶ rds-bridge proxy ──▶ aws ssm tunnel ──▶ RDS
@@ -34,6 +35,16 @@ app ──▶ rds-bridge proxy ──▶ aws ssm tunnel ──▶ RDS
 - `aws` CLI v2 + `session-manager-plugin` (for the SSM tunnel)
 - AWS profiles with permission to start the SSM session and to generate the RDS
   IAM token (these can be two different profiles)
+
+## SSO login
+
+`start` checks both profiles' credentials first. If an SSO session has expired
+and you're on a terminal, it runs `aws sso login` for you before bringing the
+tunnel up — grouped by SSO session, so profiles sharing a session trigger a
+single browser prompt. With `--detach` the login happens in the foreground
+parent, then the proxy detaches with a refreshed token cache. Without a TTY
+(cron, scripts) it doesn't open a browser — it fails with the exact
+`aws sso login` command to run.
 
 ## Install
 
@@ -60,17 +71,18 @@ Config is discovered via `--config`, then `$RDS_BRIDGE_CONFIG`,
 
 ```bash
 rds-bridge list                       # show configured targets (instances)
-rds-bridge list plataforma-dev        # show that target's databases + ports
-rds-bridge start plataforma-dev       # foreground: one tunnel, all DB listeners
-rds-bridge start plataforma-dev --detach
-rds-bridge status plataforma-dev      # one line per database
-rds-bridge logs plataforma-dev -f
-rds-bridge stop plataforma-dev
-eval "$(rds-bridge env plataforma-dev avalia-online-dev)"   # export DB_* for one database
+rds-bridge start my-rds-dev           # foreground (Ctrl-C to stop)
+rds-bridge start my-rds-dev --detach
+rds-bridge status my-rds-dev          # process + proxy port reachability
+rds-bridge logs my-rds-dev -f
+rds-bridge stop my-rds-dev
+eval "$(rds-bridge env my-rds-dev)"           # DB_* without DB_DATABASE (app sets its own)
+eval "$(rds-bridge env my-rds-dev app-db)"    # or fill DB_DATABASE for convenience
 ```
 
-`env` takes a database name; it can be omitted only when the target has a single
-database.
+The app selects the database on connect (`dbname=…`, `psql -d …`, or
+`DB_DATABASE`); the same port reaches any database on the instance. `env`'s
+database argument is optional and only fills `DB_DATABASE`.
 
 ## Notes
 

@@ -1,6 +1,7 @@
 targets:
-  # A target is one RDS instance (one SSM tunnel) exposing one or more
-  # databases, each on its own local port.
+  # A target is one RDS instance (one SSM tunnel) exposed on one local port.
+  # The client picks which database to connect to (via dbname / DB_DATABASE),
+  # so a single port serves every database on the instance.
   my-rds-dev:
     aws_region: us-east-1
 
@@ -17,14 +18,9 @@ targets:
       token_port: 5432
       # user: optional override; defaults to STS GetCallerIdentity UserId
 
-    # Shared static credential the app uses to reach the proxy (default for all
-    # databases below). Override per-database with a nested `local:` if needed.
+    # Local port the app connects to, and the static credential it uses to reach
+    # the proxy (the real RDS auth uses a per-connection IAM token).
+    listen_port: 5488
     local:
       user: app
       password: app
-
-    databases:
-      app-db:
-        listen_port: 5488
-      analytics-db:
-        listen_port: 5489

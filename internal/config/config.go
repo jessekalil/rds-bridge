@@ -14,24 +14,16 @@ type Config struct {
 	Targets map[string]*Target `yaml:"targets"`
 }
 
-// Target holds everything needed to bring up the proxies for one RDS instance.
-// A single instance (one SSM tunnel) can expose several databases, each on its
-// own local listen port.
+// Target holds everything needed to bring up the proxy for one RDS instance.
+// A single instance (one SSM tunnel) is exposed on one local port; the client
+// chooses which database to connect to via its startup message.
 type Target struct {
-	Name      string               `yaml:"-"`
-	AWSRegion string               `yaml:"aws_region"`
-	SSM       SSM                  `yaml:"ssm"`
-	IAM       IAM                  `yaml:"iam"`
-	Local     Local                `yaml:"local"` // shared static credential (default for all databases)
-	Databases map[string]*Database `yaml:"databases"`
-}
-
-// Database is one database on the instance, exposed on its own listen port.
-type Database struct {
 	Name       string `yaml:"-"`
+	AWSRegion  string `yaml:"aws_region"`
+	SSM        SSM    `yaml:"ssm"`
+	IAM        IAM    `yaml:"iam"`
 	ListenPort int    `yaml:"listen_port"`
-	// Local overrides the target-level static credential for this database.
-	Local *Local `yaml:"local"`
+	Local      Local  `yaml:"local"` // static credential the app uses to reach the proxy
 }
 
 // SSM describes the port-forwarding session to the bastion.
@@ -75,9 +67,6 @@ func Load(path string) (*Config, error) {
 	}
 	for name, t := range cfg.Targets {
 		t.Name = name
-		for dbName, db := range t.Databases {
-			db.Name = dbName
-		}
 	}
 	return &cfg, nil
 }
@@ -124,75 +113,16 @@ func (t *Target) validate() error {
 		{"iam.profile", t.IAM.Profile != ""},
 		{"iam.token_host", t.IAM.TokenHost != ""},
 		{"iam.token_port", t.IAM.TokenPort != 0},
+		{"listen_port", t.ListenPort != 0},
+		{"local.user", t.Local.User != ""},
+		{"local.password", t.Local.Password != ""},
 	}
 	for _, c := range checks {
 		if err := missing(c.field, c.ok); err != nil {
 			return err
 		}
 	}
-
-	if len(t.Databases) == 0 {
-		return fmt.Errorf("no databases defined")
-	}
-	ports := map[int]string{}
-	for _, db := range t.Databases {
-		if db.ListenPort == 0 {
-			return fmt.Errorf("database %s: missing listen_port", db.Name)
-		}
-		if other, dup := ports[db.ListenPort]; dup {
-			return fmt.Errorf("databases %s and %s share listen_port %d", other, db.Name, db.ListenPort)
-		}
-		ports[db.ListenPort] = db.Name
-
-		local := db.EffectiveLocal(t)
-		if local.User == "" || local.Password == "" {
-			return fmt.Errorf("database %s: missing local.user/local.password (no shared default either)", db.Name)
-		}
-	}
 	return nil
-}
-
-// EffectiveLocal returns the static credential for this database: its own
-// override if set, otherwise the target-level shared credential.
-func (d *Database) EffectiveLocal(t *Target) Local {
-	if d.Local != nil {
-		return *d.Local
-	}
-	return t.Local
-}
-
-// SortedDatabases returns the databases ordered by name for stable output.
-func (t *Target) SortedDatabases() []*Database {
-	dbs := make([]*Database, 0, len(t.Databases))
-	for _, db := range t.Databases {
-		dbs = append(dbs, db)
-	}
-	sort.Slice(dbs, func(i, j int) bool { return dbs[i].Name < dbs[j].Name })
-	return dbs
-}
-
-// Database returns a database by name. If name is empty and the target has
-// exactly one database, that one is returned.
-func (t *Target) Database(name string) (*Database, error) {
-	if name == "" {
-		if len(t.Databases) == 1 {
-			return t.SortedDatabases()[0], nil
-		}
-		return nil, fmt.Errorf("target %s has %d databases; specify one of: %v", t.Name, len(t.Databases), t.databaseNames())
-	}
-	db, ok := t.Databases[name]
-	if !ok {
-		return nil, fmt.Errorf("database %s not found in target %s (have: %v)", name, t.Name, t.databaseNames())
-	}
-	return db, nil
-}
-
-func (t *Target) databaseNames() []string {
-	names := make([]string, 0, len(t.Databases))
-	for _, db := range t.SortedDatabases() {
-		names = append(names, db.Name)
-	}
-	return names
 }
 
 // Discover finds the config path using, in order: the explicit flag, the

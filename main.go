@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -9,9 +10,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jessekalil/rds-bridge/internal/awsiam"
 	"github.com/jessekalil/rds-bridge/internal/config"
 	"github.com/jessekalil/rds-bridge/internal/runner"
 	"github.com/jessekalil/rds-bridge/internal/state"
+	"golang.org/x/term"
 )
 
 var version = "dev"
@@ -19,7 +22,7 @@ var version = "dev"
 const usage = `rds-bridge — local Postgres proxy to RDS over SSM with IAM auth
 
 Usage:
-  rds-bridge list [target]
+  rds-bridge list
   rds-bridge start <target> [--detach] [--config <path>]
   rds-bridge stop <target>
   rds-bridge status <target>
@@ -27,8 +30,9 @@ Usage:
   rds-bridge env <target> [database]
   rds-bridge version
 
-A target is one RDS instance (one SSM tunnel) exposing one or more databases,
-each on its own local port.
+A target is one RDS instance (one SSM tunnel) exposed on one local port; the
+client picks the database via its connection (dbname). The env command takes an
+optional database name only to fill DB_DATABASE for convenience.
 
 Config discovery: --config, then $RDS_BRIDGE_CONFIG, ./rds-bridge.yaml,
 ~/.config/rds-bridge/config.yaml`
@@ -114,7 +118,7 @@ func loadTarget(name, configPath string) (*config.Target, string, error) {
 }
 
 func cmdList(args []string) error {
-	positionals, configPath, _ := parseArgs(args, nil)
+	_, configPath, _ := parseArgs(args, nil)
 	path, err := config.Discover(configPath)
 	if err != nil {
 		return err
@@ -123,19 +127,6 @@ func cmdList(args []string) error {
 	if err != nil {
 		return err
 	}
-
-	// `list <target>` shows that target's databases and ports.
-	if target := arg(positionals, 0); target != "" {
-		t, err := cfg.Target(target)
-		if err != nil {
-			return err
-		}
-		for _, db := range t.SortedDatabases() {
-			fmt.Printf("%s\t127.0.0.1:%d\n", db.Name, db.ListenPort)
-		}
-		return nil
-	}
-
 	for _, n := range cfg.Names() {
 		fmt.Println(n)
 	}
@@ -157,10 +148,23 @@ func cmdStart(args []string) error {
 		return err
 	}
 
+	// Preflight: make sure the SSM and IAM profiles have valid SSO credentials
+	// before bringing anything up. Runs in this (interactive) parent so that a
+	// --detach child inherits an already-refreshed SSO cache.
+	if err := awsiam.EnsureProfiles(context.Background(),
+		[]string{t.SSM.Profile, t.IAM.Profile}, isTTY(),
+		func(f string, a ...any) { fmt.Fprintf(os.Stderr, "[auth] "+f+"\n", a...) }); err != nil {
+		return err
+	}
+
 	if detach {
 		return startDetached(target, path)
 	}
 	return runner.Run(t)
+}
+
+func isTTY() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
 func startDetached(target, configPath string) error {
@@ -234,15 +238,13 @@ func cmdStatus(args []string) error {
 		fmt.Println("process: stopped")
 	}
 
-	for _, db := range t.SortedDatabases() {
-		addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(db.ListenPort))
-		conn, derr := net.DialTimeout("tcp", addr, 2*time.Second)
-		if derr == nil {
-			_ = conn.Close()
-			fmt.Printf("%-30s accepting on %s\n", db.Name, addr)
-		} else {
-			fmt.Printf("%-30s not reachable on %s\n", db.Name, addr)
-		}
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(t.ListenPort))
+	conn, derr := net.DialTimeout("tcp", addr, 2*time.Second)
+	if derr == nil {
+		_ = conn.Close()
+		fmt.Printf("proxy:   accepting on %s\n", addr)
+	} else {
+		fmt.Printf("proxy:   not reachable on %s\n", addr)
 	}
 	return nil
 }
@@ -285,17 +287,16 @@ func cmdEnv(args []string) error {
 	if err != nil {
 		return err
 	}
-	db, err := t.Database(arg(positionals, 1))
-	if err != nil {
-		return err
+	// Optional database name: fills DB_DATABASE for convenience. When omitted the
+	// app chooses its own database (the proxy routes by whatever dbname connects).
+	if db := arg(positionals, 1); db != "" {
+		fmt.Printf("export DB_DATABASE=%s\n", db)
 	}
-	local := db.EffectiveLocal(t)
-	fmt.Printf("export DB_DATABASE=%s\n", db.Name)
-	fmt.Printf("export DB_PORT=%d\n", db.ListenPort)
+	fmt.Printf("export DB_PORT=%d\n", t.ListenPort)
 	fmt.Printf("export DB_SSL_REJECT_UNAUTHORIZED=false\n")
 	fmt.Printf("export DB_READ_HOST=127.0.0.1\n")
 	fmt.Printf("export DB_WRITE_HOST=127.0.0.1\n")
-	fmt.Printf("export DB_USER=%s\n", local.User)
-	fmt.Printf("export DB_PASSWORD=%s\n", local.Password)
+	fmt.Printf("export DB_USER=%s\n", t.Local.User)
+	fmt.Printf("export DB_PASSWORD=%s\n", t.Local.Password)
 	return nil
 }
