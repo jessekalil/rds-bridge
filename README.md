@@ -1,7 +1,7 @@
 # rds-bridge
 
 Single-binary local Postgres proxy to an RDS instance reachable only over AWS
-SSM, using RDS **IAM authentication** — without changing your app's code.
+SSM, using RDS **IAM authentication**.
 
 Your app connects to `127.0.0.1:<listen_port>` with a static credential. The
 proxy opens each backend connection to RDS with a freshly minted IAM token, so
@@ -195,21 +195,21 @@ Or natively on Windows with the Go toolchain (PowerShell):
 cd C:\Users\<you>\rds-bridge
 
 rds-bridge list                          :: configured targets
-rds-bridge list plataforma-dev           :: that target's databases + ports
-rds-bridge start plataforma-dev          :: foreground (Ctrl+C to stop)
-rds-bridge start plataforma-dev --detach :: background
-rds-bridge status plataforma-dev
-rds-bridge logs plataforma-dev -f
-rds-bridge stop plataforma-dev
+rds-bridge list my-rds-dev           :: that target's databases + ports
+rds-bridge start my-rds-dev          :: foreground (Ctrl+C to stop)
+rds-bridge start my-rds-dev --detach :: background
+rds-bridge status my-rds-dev
+rds-bridge logs my-rds-dev -f
+rds-bridge stop my-rds-dev
 
 :: load DB_* into the current CMD session
-rds-bridge env plataforma-dev --shell cmd > env.bat && call env.bat
+rds-bridge env my-rds-dev --shell cmd > env.bat && call env.bat
 ```
 
 In **PowerShell**, load the variables like this instead:
 
 ```powershell
-rds-bridge env plataforma-dev --shell powershell | Invoke-Expression
+rds-bridge env my-rds-dev --shell powershell | Invoke-Expression
 ```
 
 `env` emits the right syntax per shell via `--shell posix|powershell|cmd`
